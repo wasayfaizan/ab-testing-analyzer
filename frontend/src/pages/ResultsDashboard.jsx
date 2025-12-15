@@ -11,6 +11,7 @@ import MDECalculator from "../components/MDECalculator";
 import RiskAssessment from "../components/RiskAssessment";
 import GlossaryDrawer from "../components/GlossaryDrawer";
 import CUPEDSection from "../components/CUPEDSection";
+import AdvancedAnalysisResults from "../components/AdvancedAnalysisResults";
 
 function ResultsDashboard({ results, setAnalysisResults }) {
   const navigate = useNavigate();
@@ -36,6 +37,11 @@ function ResultsDashboard({ results, setAnalysisResults }) {
   }, [results, setAnalysisResults]);
 
   const displayResults = results || localResults;
+  const analysisMode = displayResults?.analysis_mode || "ab";
+
+  // Debug logging
+  console.log("ResultsDashboard - displayResults:", displayResults);
+  console.log("ResultsDashboard - analysisMode:", analysisMode);
 
   if (!displayResults) {
     return (
@@ -78,123 +84,148 @@ function ResultsDashboard({ results, setAnalysisResults }) {
         {/* Action Bar */}
         <ActionBar results={displayResults} />
 
-        {/* Key Metrics Section */}
-        <div className="animate-fade-in">
-          <CollapsibleSection
-            title="Key Metrics"
-            icon={
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                />
-              </svg>
-            }
-            defaultOpen={true}
-            gradient="indigo"
-          >
-            <SummaryCards results={displayResults} />
-          </CollapsibleSection>
-        </div>
-
-        {/* Recommendation Card */}
-        <div className="animate-fade-in">
-          <RecommendationCard
-            recommendation={recommendation}
-            color={recommendationColor}
-          />
-        </div>
-
-        {/* CUPED Section */}
-        {displayResults.cuped && displayResults.cuped.enabled && (
-          <CollapsibleSection
-            title="CUPED-Adjusted Metrics"
-            icon={
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-                />
-              </svg>
-            }
-            defaultOpen={true}
-            gradient="purple"
-          >
-            <CUPEDSection cupedResults={displayResults.cuped} />
-          </CollapsibleSection>
+        {/* Advanced Analysis Results (for non-A/B modes) */}
+        {analysisMode !== "ab" && (
+          <div className="animate-fade-in">
+            {displayResults ? (
+              <AdvancedAnalysisResults
+                results={displayResults}
+                analysisMode={analysisMode}
+              />
+            ) : (
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                <p className="text-yellow-800 dark:text-yellow-300">
+                  No results data available. Analysis mode: {analysisMode}
+                </p>
+              </div>
+            )}
+          </div>
         )}
 
-        {/* Risk Assessment */}
-        <CollapsibleSection
-          title="Experiment Risk Assessment"
-          icon={
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+        {/* Standard A/B Test Results */}
+        {analysisMode === "ab" && (
+          <>
+            {/* Key Metrics Section */}
+            <div className="animate-fade-in">
+              <CollapsibleSection
+                title="Key Metrics"
+                icon={
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                    />
+                  </svg>
+                }
+                defaultOpen={true}
+                gradient="indigo"
+              >
+                <SummaryCards results={displayResults} />
+              </CollapsibleSection>
+            </div>
+
+            {/* Recommendation Card */}
+            <div className="animate-fade-in">
+              <RecommendationCard
+                recommendation={recommendation}
+                color={recommendationColor}
               />
-            </svg>
-          }
-          defaultOpen={true}
-          gradient="purple"
-        >
-          <RiskAssessment results={displayResults} />
-        </CollapsibleSection>
+            </div>
 
-        {/* Charts Section */}
-        <CollapsibleSection
-          title="Visualizations"
-          icon={
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+            {/* CUPED Section */}
+            {displayResults.cuped && displayResults.cuped.enabled && (
+              <CollapsibleSection
+                title="CUPED-Adjusted Metrics"
+                icon={
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+                    />
+                  </svg>
+                }
+                defaultOpen={true}
+                gradient="purple"
+              >
+                <CUPEDSection cupedResults={displayResults.cuped} />
+              </CollapsibleSection>
+            )}
+
+            {/* Risk Assessment - Only for A/B test mode */}
+            {displayResults.bayesian && displayResults.confidence_interval && (
+              <CollapsibleSection
+                title="Experiment Risk Assessment"
+                icon={
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
+                  </svg>
+                }
+                defaultOpen={true}
+                gradient="purple"
+              >
+                <RiskAssessment results={displayResults} />
+              </CollapsibleSection>
+            )}
+
+            {/* Charts Section - Only for A/B test mode */}
+            <CollapsibleSection
+              title="Visualizations"
+              icon={
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"
+                  />
+                </svg>
+              }
+              defaultOpen={true}
+              gradient="teal"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"
+              <ChartsSection results={displayResults} />
+            </CollapsibleSection>
+
+            {/* AI Interpretation - Only for A/B test mode */}
+            <div className="animate-fade-in">
+              <AIInterpretationCard
+                interpretation={displayResults.interpretation}
+                results={displayResults}
               />
-            </svg>
-          }
-          defaultOpen={true}
-          gradient="teal"
-        >
-          <ChartsSection results={displayResults} />
-        </CollapsibleSection>
+            </div>
+          </>
+        )}
 
-        {/* AI Interpretation */}
-        <div className="animate-fade-in">
-          <AIInterpretationCard
-            interpretation={displayResults.interpretation}
-            results={displayResults}
-          />
-        </div>
-
-        {/* Advanced Stats */}
+        {/* Advanced Stats - Available for all modes */}
         <CollapsibleSection
           title="Advanced Statistics"
           icon={

@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 from statsmodels.stats.proportion import proportions_ztest
+import statsmodels.api as sm
 import io
 import json
 import os
@@ -100,6 +101,52 @@ class RiskAssessmentRequest(BaseModel):
     bayesian_prob: float = Field(..., ge=0, le=1, description="Bayesian P(B > A)")
     sample_size_a: int = Field(..., gt=0, description="Sample size of group A")
     sample_size_b: int = Field(..., gt=0, description="Sample size of group B")
+
+
+# New models for advanced features
+class MultiVariantAnalysisRequest(BaseModel):
+    group_column: str = Field(..., description="Column name containing group labels")
+    metric_column: str = Field(..., description="Column name containing metric values")
+    metric_type: Literal["binary", "numeric"] = Field(..., description="Type of metric")
+    control_group: str = Field(..., description="Control group name")
+    treatment_groups: List[str] = Field(..., description="List of treatment group names")
+
+
+class SegmentationAnalysisRequest(BaseModel):
+    group_column: str = Field(..., description="Column name containing group labels")
+    metric_column: str = Field(..., description="Column name containing metric values")
+    segment_column: str = Field(..., description="Column name for segmentation (e.g., demographics)")
+    metric_type: Literal["binary", "numeric"] = Field(..., description="Type of metric")
+    group_a_name: str = Field(..., description="Control group name")
+    group_b_name: str = Field(..., description="Treatment group name")
+
+
+class TimeBasedAnalysisRequest(BaseModel):
+    group_column: str = Field(..., description="Column name containing group labels")
+    metric_column: str = Field(..., description="Column name containing metric values")
+    timestamp_column: str = Field(..., description="Column name containing timestamps")
+    metric_type: Literal["binary", "numeric"] = Field(..., description="Type of metric")
+    group_a_name: str = Field(..., description="Control group name")
+    group_b_name: str = Field(..., description="Treatment group name")
+    time_granularity: Literal["hour", "day", "week"] = Field("day", description="Time granularity for analysis")
+
+
+class RegressionAnalysisRequest(BaseModel):
+    group_column: str = Field(..., description="Column name containing group labels")
+    metric_column: str = Field(..., description="Column name containing metric values")
+    covariate_columns: List[str] = Field(..., description="List of covariate column names")
+    metric_type: Literal["binary", "numeric"] = Field(..., description="Type of metric")
+    group_a_name: str = Field(..., description="Control group name")
+    group_b_name: str = Field(..., description="Treatment group name")
+
+
+class NonParametricTestRequest(BaseModel):
+    group_column: str = Field(..., description="Column name containing group labels")
+    metric_column: str = Field(..., description="Column name containing metric values")
+    test_type: Literal["mann_whitney", "kruskal_wallis"] = Field(..., description="Type of non-parametric test")
+    group_a_name: str = Field(..., description="Control group name (or first group)")
+    group_b_name: Optional[str] = Field(None, description="Treatment group name (optional for Kruskal-Wallis)")
+    additional_groups: Optional[List[str]] = Field(None, description="Additional groups for Kruskal-Wallis")
 
 
 @app.get("/")
@@ -1445,6 +1492,1401 @@ async def risk_assessment(request: RiskAssessmentRequest):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in risk assessment: {str(e)}")
+
+
+# ============================================================================
+# ADVANCED STATISTICAL FEATURES ENDPOINTS
+# ============================================================================
+
+@app.post("/api/multi-variant-analysis")
+async def multi_variant_analysis(
+    file: UploadFile = File(...),
+    group_column: str = Form(...),
+    metric_column: str = Form(...),
+    metric_type: str = Form("binary"),
+    control_group: str = Form(...),
+    treatment_groups: str = Form(...)  # Comma-separated list
+):
+    """
+    Analyze multi-variant test (A/B/C/D) comparing multiple treatment groups to control
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        df.columns = df.columns.str.strip()
+        
+        group_column = group_column.strip()
+        metric_column = metric_column.strip()
+        control_group = control_group.strip()
+        treatment_groups_list = [g.strip() for g in treatment_groups.split(',')]
+        
+        if group_column not in df.columns or metric_column not in df.columns:
+            raise HTTPException(status_code=400, detail="Invalid column names")
+        
+        df[group_column] = df[group_column].astype(str).str.strip()
+        
+        # Filter to only include control and treatment groups
+        all_groups = [control_group] + treatment_groups_list
+        df = df[df[group_column].isin(all_groups)]
+        
+        results = []
+        control_data = df[df[group_column] == control_group][metric_column]
+        
+        for treatment in treatment_groups_list:
+            treatment_data = df[df[group_column] == treatment][metric_column]
+            
+            if metric_type == "binary":
+                analysis = analyze_binary_metric(
+                    df[df[group_column] == control_group],
+                    df[df[group_column] == treatment],
+                    metric_column
+                )
+            else:
+                analysis = analyze_numeric_metric(
+                    df[df[group_column] == control_group],
+                    df[df[group_column] == treatment],
+                    metric_column
+                )
+            
+            analysis['treatment_group'] = treatment
+            analysis['control_group'] = control_group
+            results.append(analysis)
+        
+        # Overall comparison (Kruskal-Wallis or Chi-square)
+        if metric_type == "binary":
+            # Chi-square test for multiple proportions
+            contingency = pd.crosstab(df[group_column], df[metric_column])
+            chi2, p_value_overall = stats.chi2_contingency(contingency)[:2]
+            test_type_overall = "Chi-square test"
+        else:
+            # Kruskal-Wallis test
+            groups_data = [df[df[group_column] == g][metric_column].dropna() for g in all_groups]
+            h_stat, p_value_overall = stats.kruskal(*groups_data)
+            test_type_overall = "Kruskal-Wallis test"
+        
+        return JSONResponse(content={
+            "control_group": control_group,
+            "treatment_groups": treatment_groups_list,
+            "pairwise_comparisons": results,
+            "overall_test": {
+                "test_type": test_type_overall,
+                "p_value": float(p_value_overall),
+                "significant": bool(p_value_overall < 0.05)
+            }
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in multi-variant analysis: {str(e)}")
+
+
+@app.post("/api/segmentation-analysis")
+async def segmentation_analysis(
+    file: UploadFile = File(...),
+    group_column: str = Form(...),
+    metric_column: str = Form(...),
+    segment_column: str = Form(...),
+    metric_type: str = Form("binary"),
+    group_a_name: str = Form(...),
+    group_b_name: str = Form(...)
+):
+    """
+    Analyze A/B test results segmented by user characteristics (demographics, cohorts, etc.)
+    For each segment, computes control and treatment rates separately within that segment.
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        df.columns = df.columns.str.strip()
+        
+        group_column = group_column.strip()
+        metric_column = metric_column.strip()
+        segment_column = segment_column.strip()
+        control_group = group_a_name.strip()
+        treatment_group = group_b_name.strip()
+        
+        if group_column not in df.columns or metric_column not in df.columns or segment_column not in df.columns:
+            raise HTTPException(status_code=400, detail="Invalid column names")
+        
+        # Clean group and segment columns - ensure consistent string types
+        df[group_column] = df[group_column].astype(str).str.strip()
+        df[segment_column] = df[segment_column].astype(str).str.strip()
+        
+        # Also ensure metric column is numeric for binary (0/1) or float
+        if metric_type == "binary":
+            # Convert to numeric, coercing errors to NaN, then fill NaN with 0
+            df[metric_column] = pd.to_numeric(df[metric_column], errors='coerce').fillna(0)
+        else:
+            df[metric_column] = pd.to_numeric(df[metric_column], errors='coerce')
+        
+        # Get unique segments
+        unique_segments = df[segment_column].dropna().unique().tolist()
+        
+        # Debug: Check available group values
+        unique_groups = df[group_column].dropna().unique().tolist()
+        print(f"DEBUG: Available groups in data: {unique_groups}")
+        print(f"DEBUG: Looking for control_group='{control_group}', treatment_group='{treatment_group}'")
+        print(f"DEBUG: Segment column='{segment_column}', Group column='{group_column}'")
+        
+        segment_results = []
+        for segment in unique_segments:
+            # Filter to this segment
+            segment_df = df[df[segment_column] == segment].copy()
+            
+            if len(segment_df) == 0:
+                continue
+            
+            # Debug: Check what groups exist in this segment
+            segment_groups = segment_df[group_column].dropna().unique().tolist()
+            print(f"DEBUG: Segment '{segment}' has groups: {segment_groups}")
+            
+            # Within this segment, filter to control and treatment groups
+            # Ensure we're comparing cleaned strings
+            control_df = segment_df[segment_df[group_column].astype(str).str.strip() == control_group].copy()
+            treatment_df = segment_df[segment_df[group_column].astype(str).str.strip() == treatment_group].copy()
+            
+            print(f"DEBUG: Segment '{segment}' - control_df size: {len(control_df)}, treatment_df size: {len(treatment_df)}")
+            if len(control_df) > 0:
+                print(f"DEBUG: Segment '{segment}' - control_df sample group values: {control_df[group_column].head(3).tolist()}")
+            if len(treatment_df) > 0:
+                print(f"DEBUG: Segment '{segment}' - treatment_df sample group values: {treatment_df[group_column].head(3).tolist()}")
+            
+            if len(control_df) == 0 or len(treatment_df) == 0:
+                print(f"DEBUG: Skipping segment '{segment}' - missing control or treatment data")
+                continue
+            
+            # Verify we have different dataframes
+            if len(control_df) == len(treatment_df) and control_df.equals(treatment_df):
+                print(f"WARNING: Segment '{segment}' - control and treatment dataframes are identical!")
+                continue
+            
+            # Compute rates within the segment
+            if metric_type == "binary":
+                # For binary metrics, use mean() which gives conversion rate
+                control_rate = float(control_df[metric_column].mean()) if len(control_df) > 0 else 0.0
+                treatment_rate = float(treatment_df[metric_column].mean()) if len(treatment_df) > 0 else 0.0
+                
+                print(f"DEBUG: Segment '{segment}' - control_rate: {control_rate}, treatment_rate: {treatment_rate}")
+                
+                # Compute lift
+                lift = ((treatment_rate - control_rate) / control_rate * 100) if control_rate > 0 else 0
+                
+                # Two-proportion z-test for statistical significance
+                n_control = len(control_df)
+                n_treatment = len(treatment_df)
+                conversions_control = control_df[metric_column].sum()
+                conversions_treatment = treatment_df[metric_column].sum()
+                
+                # Pooled proportion
+                p_pool = (conversions_control + conversions_treatment) / (n_control + n_treatment) if (n_control + n_treatment) > 0 else 0
+                
+                # Standard error
+                se = np.sqrt(p_pool * (1 - p_pool) * (1/n_control + 1/n_treatment)) if p_pool > 0 and p_pool < 1 and n_control > 0 and n_treatment > 0 else 0
+                
+                # Z-statistic
+                diff = treatment_rate - control_rate
+                z_stat = (diff / se) if se > 0 else 0
+                
+                # P-value
+                if se > 0:
+                    p_value = 2 * stats.norm.sf(abs(z_stat))
+                else:
+                    p_value = 1.0
+                
+                # 95% Confidence Interval
+                z_critical = 1.96
+                ci_lower = diff - z_critical * se
+                ci_upper = diff + z_critical * se
+                
+                # Effect size (Cohen's h)
+                h = 2 * (np.arcsin(np.sqrt(treatment_rate)) - np.arcsin(np.sqrt(control_rate))) if treatment_rate >= 0 and treatment_rate <= 1 and control_rate >= 0 and control_rate <= 1 else 0
+                
+                analysis = {
+                    'metric_type': 'binary',
+                    'group_a': {
+                        'size': int(n_control),
+                        'conversions': int(conversions_control),
+                        'rate': float(control_rate),
+                        'mean': float(control_rate)
+                    },
+                    'group_b': {
+                        'size': int(n_treatment),
+                        'conversions': int(conversions_treatment),
+                        'rate': float(treatment_rate),
+                        'mean': float(treatment_rate)
+                    },
+                    'lift': float(lift),
+                    'p_value': float(p_value),
+                    'test_statistic': float(z_stat),
+                    'test_type': 'two-proportion z-test',
+                    'effect_size': float(h),
+                    'effect_size_type': "Cohen's h",
+                    'confidence_interval': {
+                        'lower': float(ci_lower),
+                        'upper': float(ci_upper),
+                        'level': 0.95
+                    },
+                    'difference': float(diff)
+                }
+            else:
+                # For numeric metrics, use mean()
+                control_rate = control_df[metric_column].mean() if len(control_df) > 0 else 0
+                treatment_rate = treatment_df[metric_column].mean() if len(treatment_df) > 0 else 0
+                
+                # Compute lift
+                lift = ((treatment_rate - control_rate) / control_rate * 100) if control_rate != 0 else 0
+                
+                # Two-sample t-test for numeric metrics
+                control_values = control_df[metric_column].dropna()
+                treatment_values = treatment_df[metric_column].dropna()
+                
+                if len(control_values) == 0 or len(treatment_values) == 0:
+                    continue
+                
+                # Perform t-test
+                t_stat, p_value = stats.ttest_ind(treatment_values, control_values)
+                
+                # Standard errors
+                se_control = control_values.std() / np.sqrt(len(control_values)) if len(control_values) > 0 else 0
+                se_treatment = treatment_values.std() / np.sqrt(len(treatment_values)) if len(treatment_values) > 0 else 0
+                se_diff = np.sqrt(se_control**2 + se_treatment**2)
+                
+                # 95% Confidence Interval
+                t_critical = 1.96  # Approximate for large samples
+                diff = treatment_rate - control_rate
+                ci_lower = diff - t_critical * se_diff
+                ci_upper = diff + t_critical * se_diff
+                
+                # Effect size (Cohen's d)
+                pooled_std = np.sqrt(((len(control_values) - 1) * control_values.var() + (len(treatment_values) - 1) * treatment_values.var()) / (len(control_values) + len(treatment_values) - 2)) if (len(control_values) + len(treatment_values) > 2) else 0
+                cohens_d = (treatment_rate - control_rate) / pooled_std if pooled_std > 0 else 0
+                
+                analysis = {
+                    'metric_type': 'numeric',
+                    'group_a': {
+                        'size': int(len(control_values)),
+                        'mean': float(control_rate),
+                        'std': float(control_values.std()),
+                        'rate': float(control_rate)  # For consistency
+                    },
+                    'group_b': {
+                        'size': int(len(treatment_values)),
+                        'mean': float(treatment_rate),
+                        'std': float(treatment_values.std()),
+                        'rate': float(treatment_rate)  # For consistency
+                    },
+                    'lift': float(lift),
+                    'p_value': float(p_value),
+                    'test_statistic': float(t_stat),
+                    'test_type': 'two-sample t-test',
+                    'effect_size': float(cohens_d),
+                    'effect_size_type': "Cohen's d",
+                    'confidence_interval': {
+                        'lower': float(ci_lower),
+                        'upper': float(ci_upper),
+                        'level': 0.95
+                    },
+                    'difference': float(diff)
+                }
+            
+            analysis['segment'] = segment
+            analysis['segment_size'] = len(segment_df)
+            segment_results.append(analysis)
+        
+        return JSONResponse(content={
+            "segment_column": segment_column,
+            "segments": segment_results,
+            "total_segments": len(segment_results),
+            "analysis_mode": "segmentation"
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in segmentation analysis: {str(e)}")
+
+
+@app.post("/api/time-based-analysis")
+async def time_based_analysis(
+    file: UploadFile = File(...),
+    group_column: str = Form(...),
+    metric_column: str = Form(...),
+    timestamp_column: str = Form(...),
+    metric_type: str = Form("binary"),
+    group_a_name: str = Form(...),
+    group_b_name: str = Form(...),
+    time_granularity: str = Form("day")
+):
+    """
+    Analyze A/B test results over time (day-of-week, hour-of-day patterns)
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        df.columns = df.columns.str.strip()
+        
+        group_column = group_column.strip()
+        metric_column = metric_column.strip()
+        timestamp_column = timestamp_column.strip()
+        
+        if group_column not in df.columns or metric_column not in df.columns or timestamp_column not in df.columns:
+            raise HTTPException(status_code=400, detail="Invalid column names")
+        
+        # Parse timestamps
+        df[timestamp_column] = pd.to_datetime(df[timestamp_column], errors='coerce')
+        df = df.dropna(subset=[timestamp_column])
+        
+        # Extract time features
+        if time_granularity == "hour":
+            df['time_period'] = df[timestamp_column].dt.hour
+            period_name = "Hour of Day"
+        elif time_granularity == "week":
+            df['time_period'] = df[timestamp_column].dt.isocalendar().week
+            period_name = "Week of Year"
+        else:  # day
+            df['time_period'] = df[timestamp_column].dt.dayofweek
+            period_name = "Day of Week"
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        df[group_column] = df[group_column].astype(str).str.strip()
+        
+        time_results = []
+        unique_periods = sorted(df['time_period'].dropna().unique())
+        
+        for period in unique_periods:
+            period_df = df[df['time_period'] == period]
+            group_a = period_df[period_df[group_column] == group_a_name]
+            group_b = period_df[period_df[group_column] == group_b_name]
+            
+            if len(group_a) == 0 or len(group_b) == 0:
+                continue
+            
+            if metric_type == "binary":
+                analysis = analyze_binary_metric(group_a, group_b, metric_column)
+            else:
+                analysis = analyze_numeric_metric(group_a, group_b, metric_column)
+            
+            period_label = day_names[int(period)] if time_granularity == "day" and period < len(day_names) else str(period)
+            analysis['time_period'] = int(period)
+            analysis['time_period_label'] = period_label
+            analysis['period_name'] = period_name
+            time_results.append(analysis)
+        
+        return JSONResponse(content={
+            "time_granularity": time_granularity,
+            "period_name": period_name,
+            "time_periods": time_results
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in time-based analysis: {str(e)}")
+
+
+def extract_numeric_covariate_effects(coefficients, covariate_info):
+    """
+    Extract numeric covariate effects from regression coefficients.
+    Returns a dictionary mapping variable names to their effects.
+    """
+    numeric_effects = {}
+    
+    for coef_data in coefficients:
+        var_name = coef_data.get('name', '')
+        
+        # Skip treatment and intercept
+        if var_name == 'treatment' or var_name == 'const':
+            continue
+        
+        # Check if this is a numeric variable (not a dummy variable)
+        is_numeric = True
+        for info in covariate_info:
+            if info.get('name') == var_name and info.get('type') == 'categorical':
+                is_numeric = False
+                break
+        
+        # Also check if it's a day effect (those are handled separately)
+        if 'day' in var_name.lower() or 'most_ads_day' in var_name.lower():
+            is_numeric = False
+        
+        if is_numeric:
+            # Calculate odds ratio only if it exists (for logistic regression)
+            odds_ratio = coef_data.get('odds_ratio')
+            if odds_ratio is None:
+                # For linear regression, calculate from coefficient if needed
+                coef = coef_data.get('coef', 0)
+                odds_ratio = np.exp(coef)  # Approximate for display purposes
+            
+            numeric_effects[var_name] = {
+                'coef': coef_data.get('coef', 0),
+                'odds_ratio': float(odds_ratio) if odds_ratio is not None else None,
+                'p_value': coef_data.get('p_value', 1),
+                'ci_lower': coef_data.get('ci_lower', 0),
+                'ci_upper': coef_data.get('ci_upper', 0),
+                'std_err': coef_data.get('std_err', 0),
+                'significant': coef_data.get('p_value', 1) < 0.05,
+                'original_name': coef_data.get('original_name', var_name)
+            }
+    
+    return numeric_effects
+
+
+def calculate_marginal_effects(model, X, X_column_names, numeric_effects, covariate_info):
+    """
+    Calculate marginal effects for numeric covariates.
+    Returns data for plotting predicted probabilities vs covariate values.
+    """
+    marginal_effects_data = {}
+    
+    if not numeric_effects:
+        return marginal_effects_data
+    
+    # Get mean values for all predictors (for holding constant)
+    X_mean = X.mean(axis=0)
+    X_mean_array = X_mean.values
+    
+    for var_name, effect_data in numeric_effects.items():
+        if var_name not in X.columns:
+            continue
+        
+        # Get column index
+        var_idx = list(X.columns).index(var_name)
+        
+        # Get actual data range for this variable
+        var_data = X[var_name]
+        var_min = float(var_data.min())
+        var_max = float(var_data.max())
+        
+        # Create range of values for plotting
+        n_points = 50
+        var_range = np.linspace(var_min, var_max, n_points)
+        
+        # Calculate predicted probabilities for each value
+        predicted_probs = []
+        ci_lower = []
+        ci_upper = []
+        
+        for val in var_range:
+            # Create prediction vector with this variable at val, others at mean
+            X_pred = X_mean_array.copy()
+            X_pred[var_idx] = val
+            
+            # Add intercept (first column)
+            X_pred_with_const = np.insert(X_pred, 0, 1.0)
+            
+            # Predict
+            pred_prob = model.predict(X_pred_with_const.reshape(1, -1))[0]
+            predicted_probs.append(float(pred_prob))
+            
+            # Calculate CI (approximate)
+            se = float(effect_data.get('std_err', 0))
+            if se > 0:
+                # Approximate CI on probability scale
+                # Use delta method approximation
+                logit_se = se * abs(val - X_mean_array[var_idx])
+                prob_se = pred_prob * (1 - pred_prob) * logit_se
+                ci_lower.append(max(0, float(pred_prob - 1.96 * prob_se)))
+                ci_upper.append(min(1, float(pred_prob + 1.96 * prob_se)))
+            else:
+                ci_lower.append(float(pred_prob))
+                ci_upper.append(float(pred_prob))
+        
+        marginal_effects_data[var_name] = {
+            'variable_name': var_name,
+            'original_name': effect_data.get('original_name', var_name),
+            'x_values': var_range.tolist(),
+            'predicted_probs': predicted_probs,
+            'ci_lower': ci_lower,
+            'ci_upper': ci_upper,
+            'coef': float(effect_data.get('coef', 0)),
+            'odds_ratio': float(effect_data.get('odds_ratio', 1)),
+            'p_value': float(effect_data.get('p_value', 1)),
+            'significant': effect_data.get('significant', False)
+        }
+    
+    return marginal_effects_data
+
+
+def calculate_binned_effects(df, numeric_effects, covariate_info, metric_column):
+    """
+    Calculate effects for binned numeric variables (for categorical comparison view).
+    """
+    binned_effects = {}
+    
+    if not numeric_effects:
+        return binned_effects
+    
+    for var_name, effect_data in numeric_effects.items():
+        original_name = effect_data.get('original_name', var_name)
+        
+        # Skip if variable not in original dataframe
+        if original_name not in df.columns:
+            continue
+        
+        # Get variable data
+        var_data = pd.to_numeric(df[original_name], errors='coerce').dropna()
+        if len(var_data) == 0:
+            continue
+        
+        # Determine binning strategy based on variable
+        if 'hour' in var_name.lower() or 'time' in var_name.lower():
+            # Time-based: Morning, Afternoon, Evening, Night
+            bins = [0, 6, 12, 18, 24]
+            labels = ['Night (0-6)', 'Morning (6-12)', 'Afternoon (12-18)', 'Evening (18-24)']
+        else:
+            # General numeric: Low, Medium, High (tertiles)
+            q33 = float(var_data.quantile(0.33))
+            q67 = float(var_data.quantile(0.67))
+            bins = [-np.inf, q33, q67, np.inf]
+            labels = ['Low', 'Medium', 'High']
+        
+        # Bin the data
+        df_binned = df.copy()
+        df_binned[f'{original_name}_binned'] = pd.cut(
+            pd.to_numeric(df[original_name], errors='coerce'),
+            bins=bins,
+            labels=labels,
+            include_lowest=True
+        )
+        
+        # Calculate conversion rates by bin
+        bin_effects = []
+        baseline_rate = None
+        
+        for label in labels:
+            bin_data = df_binned[df_binned[f'{original_name}_binned'] == label]
+            if len(bin_data) == 0:
+                continue
+            
+            # Calculate mean conversion rate in this bin
+            if metric_column in bin_data.columns:
+                conversion_rate = pd.to_numeric(bin_data[metric_column], errors='coerce').mean()
+                n = len(bin_data)
+                
+                if pd.isna(conversion_rate):
+                    continue
+                
+                # For comparison, use first bin as baseline
+                if baseline_rate is None:
+                    baseline_rate = conversion_rate
+                    bin_effects.append({
+                        'bin': str(label),
+                        'conversion_rate': float(conversion_rate),
+                        'n': int(n),
+                        'odds_ratio': 1.0,
+                        'lift': 0.0,
+                        'is_baseline': True
+                    })
+                else:
+                    # Calculate lift vs baseline
+                    if baseline_rate > 0:
+                        lift = ((conversion_rate - baseline_rate) / baseline_rate) * 100
+                        odds_ratio = conversion_rate / baseline_rate if baseline_rate > 0 else 1.0
+                    else:
+                        lift = 0.0
+                        odds_ratio = 1.0
+                    
+                    bin_effects.append({
+                        'bin': str(label),
+                        'conversion_rate': float(conversion_rate),
+                        'n': int(n),
+                        'odds_ratio': float(odds_ratio),
+                        'lift': float(lift),
+                        'is_baseline': False
+                    })
+        
+        if bin_effects:
+            binned_effects[var_name] = {
+                'variable_name': var_name,
+                'original_name': original_name,
+                'bins': bin_effects
+            }
+    
+    return binned_effects
+
+
+def generate_all_covariates_insights(day_effects, numeric_effects, coefficients, covariate_info):
+    """
+    Generate unified insights summary explaining all covariate effects.
+    """
+    insights_parts = []
+    
+    # Numeric effects summary
+    if numeric_effects:
+        strong_numeric = [
+            (name, data) for name, data in numeric_effects.items()
+            if data.get('significant', False) and data.get('coef', 0) > 0
+        ]
+        strong_numeric.sort(key=lambda x: x[1].get('coef', 0), reverse=True)
+        
+        if strong_numeric:
+            numeric_names = []
+            for name, data in strong_numeric[:3]:
+                original_name = data.get('original_name', name)
+                # Make name readable
+                readable_name = original_name.replace('_', ' ').title()
+                numeric_names.append(readable_name)
+            
+            if len(numeric_names) == 1:
+                insights_parts.append(f"Conversion likelihood increases steadily with {numeric_names[0].lower()}.")
+            elif len(numeric_names) == 2:
+                insights_parts.append(f"Conversion likelihood increases with {numeric_names[0].lower()} and {numeric_names[1].lower()}.")
+            else:
+                insights_parts.append(f"Conversion likelihood increases with {numeric_names[0].lower()}, {numeric_names[1].lower()}, and {numeric_names[2].lower()}.")
+    
+    # Day effects summary
+    if day_effects and len(day_effects) > 0:
+        significant_days = [d for d in day_effects if d.get('significant', False)]
+        if significant_days:
+            top_days = sorted(significant_days, key=lambda x: x.get('odds_ratio', 1), reverse=True)[:2]
+            day_names = [d.get('day', '') for d in top_days]
+            
+            if len(day_names) == 1:
+                insights_parts.append(f"Peaks during {day_names[0]} exposure.")
+            elif len(day_names) == 2:
+                insights_parts.append(f"Peaks during {day_names[0]} and {day_names[1]} exposure.")
+            else:
+                insights_parts.append(f"Peaks during early weekday exposure, especially {day_names[0]} and {day_names[1]}.")
+    
+    # Combine insights
+    if insights_parts:
+        return " ".join(insights_parts)
+    else:
+        return "Covariate effects are relatively uniform across all variables tested."
+
+
+def extract_day_of_week_effects(coefficients, covariate_info):
+    """
+    Extract day-of-week effects from regression coefficients.
+    Looks for dummy variables with patterns like 'day_Monday', 'day_Tuesday', 'most ads day_Monday', etc.
+    """
+    day_effects = []
+    # Patterns to match (handle both underscore and space variations)
+    day_patterns = ['day_', 'dayofweek_', 'weekday_', 'dow_', 'most_ads_day_', 'most ads day_']
+    day_names = {
+        'monday': 'Monday', 'mon': 'Monday',
+        'tuesday': 'Tuesday', 'tue': 'Tuesday', 'tues': 'Tuesday',
+        'wednesday': 'Wednesday', 'wed': 'Wednesday',
+        'thursday': 'Thursday', 'thu': 'Thursday', 'thur': 'Thursday',
+        'friday': 'Friday', 'fri': 'Friday',
+        'saturday': 'Saturday', 'sat': 'Saturday',
+        'sunday': 'Sunday', 'sun': 'Sunday'
+    }
+    
+    for coef_data in coefficients:
+        var_name = coef_data.get('name', '').lower()
+        original_name = coef_data.get('original_name', '').lower()
+        category = coef_data.get('category', '').lower() if coef_data.get('category') else ''
+        
+        # Normalize spaces to underscores for pattern matching
+        var_name_normalized = var_name.replace(' ', '_')
+        original_name_normalized = original_name.replace(' ', '_')
+        
+        # Check if this is a day-related variable
+        is_day_var = False
+        day_name = None
+        
+        # Check common day patterns (handle both underscore and space)
+        for pattern in day_patterns:
+            pattern_normalized = pattern.replace(' ', '_')
+            if pattern_normalized in var_name_normalized or pattern_normalized in original_name_normalized:
+                is_day_var = True
+                # Extract day name from variable - search in all possible locations
+                search_text = var_name_normalized + ' ' + original_name_normalized + ' ' + category
+                for day_key, day_value in day_names.items():
+                    if day_key in search_text:
+                        day_name = day_value
+                        break
+                if day_name:
+                    break
+        
+        # Also check if original covariate name or category suggests day-of-week
+        if not is_day_var:
+            # Check category field (from dummy encoding)
+            if category:
+                for day_key, day_value in day_names.items():
+                    if day_key in category:
+                        is_day_var = True
+                        day_name = day_value
+                        break
+            
+            # Check original name directly for day keywords
+            if not is_day_var:
+                search_text = original_name_normalized + ' ' + var_name_normalized
+                for day_key, day_value in day_names.items():
+                    if day_key in search_text and coef_data.get('type') == 'categorical':
+                        is_day_var = True
+                        day_name = day_value
+                        break
+        
+        if is_day_var and day_name:
+            day_effects.append({
+                "day": day_name,
+                "coef": coef_data.get('coef', 0),
+                "odds_ratio": coef_data.get('odds_ratio', 1),
+                "p_value": coef_data.get('p_value', 1),
+                "ci_lower": coef_data.get('ci_lower', 0),
+                "ci_upper": coef_data.get('ci_upper', 0),
+                "significant": bool(coef_data.get('p_value', 1) < 0.05)
+            })
+    
+    # Sort by odds ratio (highest first)
+    day_effects.sort(key=lambda x: x['odds_ratio'], reverse=True)
+    
+    return day_effects
+
+
+def generate_day_effect_interpretation(day_effects):
+    """
+    Generate human-readable interpretation of day-of-week effects.
+    """
+    if not day_effects or len(day_effects) == 0:
+        return None
+    
+    # Correctly detect baseline day: the missing day from dummy encoding
+    expected_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    returned_days = [d['day'] for d in day_effects]
+    baseline_day = next((day for day in expected_days if day not in returned_days), None)
+    
+    # Get top and bottom performing days
+    top_day = day_effects[0]
+    bottom_day = day_effects[-1] if len(day_effects) > 1 else day_effects[0]
+    
+    # Count significant days
+    significant_days = [d for d in day_effects if d['significant']]
+    num_significant = len(significant_days)
+    
+    # Build interpretation
+    interpretation_parts = []
+    
+    if top_day['significant']:
+        lift_pct = (top_day['odds_ratio'] - 1) * 100
+        p_val_str = f"p < {top_day['p_value']:.2e}" if top_day['p_value'] < 0.0001 else f"p = {top_day['p_value']:.4f}"
+        interpretation_parts.append(
+            f"Users who primarily saw ads on {top_day['day']} have {lift_pct:.1f}% higher odds of converting "
+            f"compared to the baseline day ({baseline_day if baseline_day else 'reference'}). "
+            f"This effect is statistically significant ({p_val_str})."
+        )
+    
+    # Add second best if significant
+    if len(day_effects) > 1 and day_effects[1]['significant']:
+        second_day = day_effects[1]
+        lift_pct = (second_day['odds_ratio'] - 1) * 100
+        interpretation_parts.append(
+            f"{second_day['day']} is also a strong performing day with a {lift_pct:.1f}% increase in odds."
+        )
+    
+    # Mention non-significant days
+    non_sig_days = [d for d in day_effects if not d['significant']]
+    if non_sig_days:
+        day_names = [d['day'] for d in non_sig_days]
+        if len(day_names) == 1:
+            interpretation_parts.append(f"{day_names[0]} shows no meaningful difference from baseline.")
+        else:
+            interpretation_parts.append(f"{', '.join(day_names[:-1])}, and {day_names[-1]} show no meaningful difference from baseline.")
+    
+    return " ".join(interpretation_parts)
+
+
+def generate_targeting_recommendations(day_effects):
+    """
+    Generate practical targeting recommendations based on day-of-week effects.
+    """
+    if not day_effects or len(day_effects) == 0:
+        return None
+    
+    # Get significant positive effects (odds ratio > 1 and significant)
+    strong_days = [d for d in day_effects if d['significant'] and d['odds_ratio'] > 1]
+    weak_days = [d for d in day_effects if d['significant'] and d['odds_ratio'] < 1]
+    non_sig_days = [d for d in day_effects if not d['significant']]
+    
+    recommendations = []
+    
+    if strong_days:
+        # Group strong days
+        strong_day_names = [d['day'] for d in strong_days]
+        if len(strong_day_names) == 1:
+            recommendations.append(
+                f"Consider allocating more budget or impressions on {strong_day_names[0]}, "
+                f"as this day shows significantly higher conversion likelihood ({strong_days[0]['odds_ratio']:.2f}x odds ratio)."
+            )
+        elif len(strong_day_names) == 2:
+            recommendations.append(
+                f"Consider allocating more budget or impressions on {strong_day_names[0]} and {strong_day_names[1]}, "
+                f"as these days show significantly higher conversion likelihood."
+            )
+        else:
+            recommendations.append(
+                f"Consider allocating more budget or impressions earlier in the week "
+                f"({', '.join(strong_day_names[:2])}), as these days show significantly higher conversion likelihood."
+            )
+    
+    if weak_days or non_sig_days:
+        weak_day_names = [d['day'] for d in weak_days] + [d['day'] for d in non_sig_days if d['odds_ratio'] < 1]
+        if weak_day_names:
+            if len(weak_day_names) == 1:
+                recommendations.append(
+                    f"{weak_day_names[0]} appears less responsive, suggesting reduced ad spend "
+                    f"or different creatives for this time period."
+                )
+            else:
+                recommendations.append(
+                    f"Weekend days ({', '.join(weak_day_names)}) appear less responsive, suggesting "
+                    f"reduced ad spend or different creatives for those time periods."
+                )
+    
+    if not recommendations:
+        recommendations.append(
+            "Day-of-week effects are relatively uniform. Consider testing other segmentation variables."
+        )
+    
+    return " ".join(recommendations)
+
+
+@app.post("/api/regression-analysis")
+async def regression_analysis(
+    file: UploadFile = File(...),
+    group_column: str = Form(...),
+    metric_column: str = Form(...),
+    covariate_columns: str = Form(...),  # Comma-separated
+    metric_type: str = Form("binary"),
+    group_a_name: str = Form(...),
+    group_b_name: str = Form(...)
+):
+    """
+    Perform statistically valid regression analysis controlling for multiple covariates.
+    Supports both numeric and categorical covariates (categoricals are one-hot encoded).
+    Uses statsmodels for proper statistical inference.
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        df.columns = df.columns.str.strip()
+        
+        group_column = group_column.strip()
+        metric_column = metric_column.strip()
+        covariate_list = [c.strip() for c in covariate_columns.split(',')]
+        
+        if group_column not in df.columns or metric_column not in df.columns:
+            raise HTTPException(status_code=400, detail="Invalid column names")
+        
+        for col in covariate_list:
+            if col not in df.columns:
+                raise HTTPException(status_code=400, detail=f"Covariate column '{col}' not found")
+        
+        df[group_column] = df[group_column].astype(str).str.strip()
+        
+        # Filter to only include the two groups
+        df = df[df[group_column].isin([group_a_name, group_b_name])]
+        
+        if len(df) < 10:
+            raise HTTPException(status_code=400, detail="Not enough data after filtering groups")
+        
+        # Create binary treatment indicator: 1 for treatment (group B), 0 for control (group A)
+        df['treatment'] = (df[group_column] == group_b_name).astype(int)
+        
+        # Prepare outcome variable
+        if metric_type == "binary":
+            # Ensure binary metric is 0/1
+            y = pd.to_numeric(df[metric_column], errors='coerce')
+            if y.isna().any():
+                raise HTTPException(status_code=400, detail="Binary metric column contains non-numeric values")
+            y = y.astype(int)
+            if not set(y.unique()).issubset({0, 1}):
+                raise HTTPException(status_code=400, detail="Binary metric must contain only 0 and 1 values")
+        else:
+            y = pd.to_numeric(df[metric_column], errors='coerce')
+        
+        # Prepare covariates: handle numeric and categorical
+        warnings = []
+        covariate_info = []
+        
+        # Start building X with treatment
+        X = pd.DataFrame({'treatment': df['treatment']}, index=df.index)
+        
+        for cov in covariate_list:
+            # Try to convert to numeric
+            numeric_series = pd.to_numeric(df[cov], errors='coerce')
+            
+            # Check if column is fully numeric (no NaN after conversion)
+            if numeric_series.isna().sum() == 0:
+                # Fully numeric - use as is
+                if numeric_series.nunique() == 1:
+                    warnings.append(f"Warning: Covariate '{cov}' is constant (single value). It will be excluded.")
+                    continue
+                
+                # Add numeric covariate to X
+                X[cov] = numeric_series
+                covariate_info.append({
+                    "name": cov,
+                    "type": "numeric",
+                    "original_name": cov
+                })
+            else:
+                # Categorical - one-hot encode with drop_first=True
+                categorical_series = df[cov].astype(str)
+                
+                # Check for single category
+                unique_cats = categorical_series.unique()
+                if len(unique_cats) == 1:
+                    warnings.append(f"Warning: Categorical covariate '{cov}' has only one category after filtering. It will be excluded.")
+                    continue
+                
+                # One-hot encode with drop_first=True to avoid multicollinearity
+                dummies = pd.get_dummies(categorical_series, prefix=cov, drop_first=True)
+                
+                # Add each dummy variable to X
+                for dummy_col in dummies.columns:
+                    dummy_series = dummies[dummy_col]
+                    
+                    # Check if dummy is constant
+                    if dummy_series.nunique() == 1:
+                        warnings.append(f"Warning: Dummy variable '{dummy_col}' is constant. It will be excluded.")
+                        continue
+                    
+                    # Add dummy column to X
+                    X[dummy_col] = dummy_series
+                    covariate_info.append({
+                        "name": dummy_col,
+                        "type": "categorical",
+                        "original_name": cov,
+                        "category": dummy_col.replace(f"{cov}_", "")
+                    })
+        
+        # Remove rows with missing values in covariates or outcome
+        valid_mask = ~(y.isna() | X.isna().any(axis=1))
+        X = X[valid_mask].copy()
+        y = y[valid_mask].copy()
+        
+        if len(X) < 10:
+            raise HTTPException(status_code=400, detail="Not enough valid data after removing missing values")
+        
+        # Remove any constant columns (shouldn't happen but double-check)
+        constant_cols = []
+        for col in X.columns:
+            if X[col].nunique() == 1:
+                constant_cols.append(col)
+                X = X.drop(columns=[col])
+                warnings.append(f"Warning: Column '{col}' is constant and was removed.")
+        
+        if len(X.columns) == 0:
+            raise HTTPException(status_code=400, detail="No valid predictors after removing constant columns")
+        
+        # CRITICAL: Ensure all columns are numeric (convert to float64)
+        # This fixes the "Pandas data cast to numpy dtype of object" error
+        for col in X.columns:
+            X[col] = pd.to_numeric(X[col], errors='coerce')
+        
+        # Remove any rows that became NaN after conversion
+        valid_mask = ~(y.isna() | X.isna().any(axis=1))
+        X = X[valid_mask].copy()
+        y = y[valid_mask].copy()
+        
+        if len(X) < 10:
+            raise HTTPException(status_code=400, detail="Not enough valid data after numeric conversion")
+        
+        # Check for multicollinearity (perfect correlation)
+        if len(X.columns) > 1:
+            correlation_matrix = X.corr().abs()
+            high_corr_pairs = []
+            for i in range(len(correlation_matrix.columns)):
+                for j in range(i+1, len(correlation_matrix.columns)):
+                    if correlation_matrix.iloc[i, j] > 0.99:  # Near-perfect correlation
+                        high_corr_pairs.append((correlation_matrix.columns[i], correlation_matrix.columns[j]))
+            
+            if high_corr_pairs:
+                warnings.append(f"Warning: Multicollinearity detected between: {', '.join([f'{p[0]}-{p[1]}' for p in high_corr_pairs])}")
+        
+        # Ensure y is also numeric
+        y = pd.to_numeric(y, errors='coerce')
+        valid_mask = ~(y.isna() | X.isna().any(axis=1))
+        X = X[valid_mask].copy()
+        y = y[valid_mask].copy()
+        
+        if len(X) < 10:
+            raise HTTPException(status_code=400, detail="Not enough valid data after final cleaning")
+        
+        # Convert to numpy arrays to ensure proper dtype
+        # This is the key fix for the convergence error
+        X_array = X.values.astype(float)
+        y_array = y.values.astype(float)
+        
+        # Store column names before adding constant
+        X_column_names = list(X.columns)
+        
+        # Add intercept (must be last step before modeling)
+        # sm.add_constant adds intercept as first column
+        X_with_const = sm.add_constant(X_array, has_constant='add')
+        
+        if metric_type == "binary":
+            # Logistic regression using statsmodels
+            # Use numpy arrays to avoid dtype issues
+            try:
+                model = sm.Logit(y_array, X_with_const).fit(disp=0, maxiter=1000)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Logistic regression failed to converge: {str(e)}")
+            
+            # Extract results from summary table
+            summary_table = model.summary2().tables[1]
+            
+            # Map variable names: const is first, then our X columns in order
+            variable_names = ['const'] + X_column_names
+            
+            # Update summary table index with our variable names
+            if len(summary_table) == len(variable_names):
+                summary_table.index = variable_names
+            else:
+                # If lengths don't match, try to map what we can
+                summary_table.index = variable_names[:len(summary_table)] + list(summary_table.index[len(summary_table):])
+            
+            # Get treatment coefficient
+            if 'treatment' not in summary_table.index:
+                raise HTTPException(status_code=500, detail=f"Treatment variable not found in model results. Available variables: {summary_table.index.tolist()}, Expected: {variable_names}")
+            
+            treatment_row = summary_table.loc['treatment']
+            
+            # Extract values with proper column name handling
+            treatment_coef = float(treatment_row['Coef.'])
+            treatment_std_err = float(treatment_row['Std.Err.'])
+            treatment_z = float(treatment_row['z'])
+            treatment_p_value = float(treatment_row['P>|z|'])
+            
+            # Handle CI column names (they might have different formats)
+            ci_col_lower = '[0.025' if '[0.025' in summary_table.columns else '[0.025]' if '[0.025]' in summary_table.columns else None
+            ci_col_upper = '0.975]' if '0.975]' in summary_table.columns else '[0.975]' if '[0.975]' in summary_table.columns else None
+            
+            if ci_col_lower and ci_col_upper:
+                treatment_ci_lower = float(treatment_row[ci_col_lower])
+                treatment_ci_upper = float(treatment_row[ci_col_upper])
+            else:
+                # Fallback: calculate CI from coef and std_err
+                treatment_ci_lower = treatment_coef - 1.96 * treatment_std_err
+                treatment_ci_upper = treatment_coef + 1.96 * treatment_std_err
+            
+            treatment_odds_ratio = np.exp(treatment_coef)
+            
+            # Build coefficients array
+            coefficients = []
+            for i, (idx, row) in enumerate(summary_table.iterrows()):
+                if idx == 'const' or i == 0:  # Skip intercept
+                    continue
+                
+                # Get the actual variable name from our X columns
+                var_name = variable_names[i] if i < len(variable_names) else idx
+                
+                coef = float(row['Coef.'])
+                std_err = float(row['Std.Err.'])
+                z_val = float(row['z'])
+                p_val = float(row['P>|z|'])
+                
+                # Handle CI column names
+                if ci_col_lower and ci_col_upper:
+                    ci_low = float(row[ci_col_lower])
+                    ci_high = float(row[ci_col_upper])
+                else:
+                    # Fallback: calculate CI
+                    ci_low = coef - 1.96 * std_err
+                    ci_high = coef + 1.96 * std_err
+                
+                odds_ratio = np.exp(coef)
+                
+                # Find original covariate name
+                original_name = var_name
+                cov_type = "numeric"
+                category = None
+                
+                for info in covariate_info:
+                    if info['name'] == var_name:
+                        original_name = info['original_name']
+                        cov_type = info['type']
+                        category = info.get('category')
+                        break
+                
+                coefficients.append({
+                    "name": var_name,
+                    "original_name": original_name,
+                    "type": cov_type,
+                    "category": category,
+                    "coef": coef,
+                    "std_err": std_err,
+                    "z": z_val,
+                    "p_value": p_val,
+                    "ci_lower": ci_low,
+                    "ci_upper": ci_high,
+                    "odds_ratio": odds_ratio
+                })
+            
+            # Extract day-of-week effects if day-related covariates exist
+            # Only for logistic regression
+            day_effects = extract_day_of_week_effects(coefficients, covariate_info)
+            day_effects_summary = None
+            targeting_recommendations = None
+            
+            # Debug: log day effects extraction
+            print(f"Day effects extracted: {len(day_effects) if day_effects else 0} days found")
+            if day_effects:
+                print(f"Day effects: {[d['day'] for d in day_effects]}")
+            
+            if day_effects and len(day_effects) > 0:
+                day_effects_summary = generate_day_effect_interpretation(day_effects)
+                targeting_recommendations = generate_targeting_recommendations(day_effects)
+            
+            # Extract numeric covariate effects
+            numeric_effects = extract_numeric_covariate_effects(coefficients, covariate_info)
+            
+            # Calculate marginal effects for numeric variables
+            marginal_effects_data = calculate_marginal_effects(
+                model, X, X_column_names, numeric_effects, covariate_info
+            )
+            
+            # Calculate binned effects (optional, for categorical comparison view)
+            binned_effects = calculate_binned_effects(
+                df, numeric_effects, covariate_info, metric_column
+            )
+            
+            # Generate unified insights summary
+            all_covariates_insights = generate_all_covariates_insights(
+                day_effects, numeric_effects, coefficients, covariate_info
+            )
+            
+            return JSONResponse(content={
+                "model_type": "Logistic Regression",
+                "treatment_effect": treatment_coef,
+                "odds_ratio": treatment_odds_ratio,
+                "p_value": treatment_p_value,
+                "ci_lower": treatment_ci_lower,
+                "ci_upper": treatment_ci_upper,
+                "coefficients": coefficients,
+                "day_effects": day_effects if day_effects else None,
+                "day_effects_summary": day_effects_summary,
+                "targeting_recommendations": targeting_recommendations,
+                "numeric_effects": numeric_effects,
+                "marginal_effects_data": marginal_effects_data,
+                "binned_effects": binned_effects,
+                "all_covariates_insights": all_covariates_insights,
+                "warnings": warnings if warnings else None,
+                "n_observations": int(len(X)),
+                "model_summary": {
+                    "llf": float(model.llf),  # Log-likelihood
+                    "aic": float(model.aic),
+                    "bic": float(model.bic),
+                    "pseudo_r_squared": float(model.prsquared) if hasattr(model, 'prsquared') else None
+                }
+            })
+        else:
+            # Linear regression using statsmodels
+            # Use numpy arrays to avoid dtype issues
+            model = sm.OLS(y_array, X_with_const).fit()
+            
+            # Extract results from summary table
+            summary_table = model.summary2().tables[1]
+            
+            # Map variable names: const is first, then our X columns in order
+            variable_names = ['const'] + X_column_names
+            
+            # Update summary table index with our variable names
+            if len(summary_table) == len(variable_names):
+                summary_table.index = variable_names
+            else:
+                # If lengths don't match, try to map what we can
+                summary_table.index = variable_names[:len(summary_table)] + list(summary_table.index[len(summary_table):])
+            
+            # Extract treatment coefficient
+            if 'treatment' not in summary_table.index:
+                raise HTTPException(status_code=500, detail=f"Treatment variable not found in model results. Available variables: {summary_table.index.tolist()}, Expected: {variable_names}")
+            
+            treatment_row = summary_table.loc['treatment']
+            treatment_coef = float(treatment_row['Coef.'])
+            treatment_std_err = float(treatment_row['Std.Err.'])
+            treatment_t = float(treatment_row['t'])
+            treatment_p_value = float(treatment_row['P>|t|'])
+            
+            # Handle CI column names
+            ci_col_lower = '[0.025' if '[0.025' in summary_table.columns else '[0.025]' if '[0.025]' in summary_table.columns else None
+            ci_col_upper = '0.975]' if '0.975]' in summary_table.columns else '[0.975]' if '[0.975]' in summary_table.columns else None
+            
+            if ci_col_lower and ci_col_upper:
+                treatment_ci_lower = float(treatment_row[ci_col_lower])
+                treatment_ci_upper = float(treatment_row[ci_col_upper])
+            else:
+                # Fallback: calculate CI
+                treatment_ci_lower = treatment_coef - 1.96 * treatment_std_err
+                treatment_ci_upper = treatment_coef + 1.96 * treatment_std_err
+            
+            # Build coefficients array
+            coefficients = []
+            for i, (idx, row) in enumerate(summary_table.iterrows()):
+                if idx == 'const' or i == 0:  # Skip intercept
+                    continue
+                
+                # Get the actual variable name from our X columns
+                var_name = variable_names[i] if i < len(variable_names) else idx
+                
+                coef = float(row['Coef.'])
+                std_err = float(row['Std.Err.'])
+                t_val = float(row['t'])
+                p_val = float(row['P>|t|'])
+                
+                # Handle CI column names
+                if ci_col_lower and ci_col_upper:
+                    ci_low = float(row[ci_col_lower])
+                    ci_high = float(row[ci_col_upper])
+                else:
+                    # Fallback: calculate CI
+                    ci_low = coef - 1.96 * std_err
+                    ci_high = coef + 1.96 * std_err
+                
+                # Find original covariate name
+                original_name = var_name
+                cov_type = "numeric"
+                category = None
+                
+                for info in covariate_info:
+                    if info['name'] == var_name:
+                        original_name = info['original_name']
+                        cov_type = info['type']
+                        category = info.get('category')
+                        break
+                
+                coefficients.append({
+                    "name": var_name,
+                    "original_name": original_name,
+                    "type": cov_type,
+                    "category": category,
+                    "coef": coef,
+                    "std_err": std_err,
+                    "t": t_val,
+                    "p_value": p_val,
+                    "ci_lower": ci_low,
+                    "ci_upper": ci_high
+                })
+            
+            # Extract numeric covariate effects for linear regression too
+            numeric_effects = extract_numeric_covariate_effects(coefficients, covariate_info)
+            
+            # Calculate marginal effects for numeric variables (for linear regression, show predicted values)
+            marginal_effects_data = calculate_marginal_effects(
+                model, X, X_column_names, numeric_effects, covariate_info
+            )
+            
+            # Generate unified insights summary
+            all_covariates_insights = generate_all_covariates_insights(
+                None, numeric_effects, coefficients, covariate_info
+            )
+            
+            return JSONResponse(content={
+                "model_type": "Linear Regression",
+                "treatment_effect": treatment_coef,
+                "p_value": treatment_p_value,
+                "ci_lower": treatment_ci_lower,
+                "ci_upper": treatment_ci_upper,
+                "coefficients": coefficients,
+                "numeric_effects": numeric_effects,
+                "marginal_effects_data": marginal_effects_data,
+                "all_covariates_insights": all_covariates_insights,
+                "warnings": warnings if warnings else None,
+                "n_observations": int(len(X)),
+                "model_summary": {
+                    "r_squared": float(model.rsquared),
+                    "adj_r_squared": float(model.rsquared_adj),
+                    "f_statistic": float(model.fvalue),
+                    "f_p_value": float(model.f_pvalue)
+                }
+            })
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error in regression analysis: {str(e)}")
+        print(f"Traceback: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error in regression analysis: {str(e)}")
+
+
+@app.post("/api/non-parametric-test")
+async def non_parametric_test(
+    file: UploadFile = File(...),
+    group_column: str = Form(...),
+    metric_column: str = Form(...),
+    test_type: str = Form("mann_whitney"),
+    group_a_name: str = Form(...),
+    group_b_name: str = Form(None),
+    additional_groups: str = Form(None)  # Comma-separated
+):
+    """
+    Perform non-parametric statistical tests (Mann-Whitney U, Kruskal-Wallis)
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        df.columns = df.columns.str.strip()
+        
+        group_column = group_column.strip()
+        metric_column = metric_column.strip()
+        
+        if group_column not in df.columns or metric_column not in df.columns:
+            raise HTTPException(status_code=400, detail="Invalid column names")
+        
+        df[group_column] = df[group_column].astype(str).str.strip()
+        data = df[metric_column].dropna()
+        
+        if test_type == "mann_whitney":
+            if not group_b_name:
+                raise HTTPException(status_code=400, detail="group_b_name required for Mann-Whitney test")
+            
+            group_a_data = df[df[group_column] == group_a_name][metric_column].dropna()
+            group_b_data = df[df[group_column] == group_b_name][metric_column].dropna()
+            
+            if len(group_a_data) < 3 or len(group_b_data) < 3:
+                raise HTTPException(status_code=400, detail="Need at least 3 observations per group")
+            
+            statistic, p_value = stats.mannwhitneyu(group_a_data, group_b_data, alternative='two-sided')
+            
+            # Calculate effect size (rank-biserial correlation)
+            n1, n2 = len(group_a_data), len(group_b_data)
+            z_score = stats.norm.ppf(p_value / 2) if p_value > 0 else 0
+            r = abs(z_score) / np.sqrt(n1 + n2)
+            
+            return JSONResponse(content={
+                "test_type": "Mann-Whitney U Test",
+                "statistic": float(statistic),
+                "p_value": float(p_value),
+                "significant": bool(p_value < 0.05),
+                "effect_size": float(r),
+                "effect_size_interpretation": "small" if r < 0.3 else "medium" if r < 0.5 else "large",
+                "group_a": {
+                    "name": group_a_name,
+                    "size": int(n1),
+                    "median": float(group_a_data.median())
+                },
+                "group_b": {
+                    "name": group_b_name,
+                    "size": int(n2),
+                    "median": float(group_b_data.median())
+                }
+            })
+        else:  # kruskal_wallis
+            groups = [group_a_name]
+            if group_b_name:
+                groups.append(group_b_name)
+            if additional_groups:
+                groups.extend([g.strip() for g in additional_groups.split(',')])
+            
+            groups_data = [df[df[group_column] == g][metric_column].dropna() for g in groups]
+            
+            if any(len(g) < 3 for g in groups_data):
+                raise HTTPException(status_code=400, detail="Need at least 3 observations per group")
+            
+            statistic, p_value = stats.kruskal(*groups_data)
+            
+            return JSONResponse(content={
+                "test_type": "Kruskal-Wallis Test",
+                "statistic": float(statistic),
+                "p_value": float(p_value),
+                "significant": bool(p_value < 0.05),
+                "groups": [
+                    {
+                        "name": groups[i],
+                        "size": int(len(groups_data[i])),
+                        "median": float(groups_data[i].median())
+                    }
+                    for i in range(len(groups))
+                ]
+            })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in non-parametric test: {str(e)}")
 
 
 @app.get("/api/glossary")

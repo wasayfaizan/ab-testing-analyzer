@@ -1,10 +1,22 @@
 import React from "react";
 
 function RiskAssessment({ results }) {
+  // Safety checks for required data
+  if (!results || !results.bayesian || !results.confidence_interval) {
+    return (
+      <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+        <p className="text-yellow-800 dark:text-yellow-300">
+          Risk assessment requires Bayesian analysis and confidence interval
+          data.
+        </p>
+      </div>
+    );
+  }
+
   const pValue = results.p_value;
-  const probB = results.bayesian.prob_b_better;
-  const ciLower = results.confidence_interval.lower;
-  const ciUpper = results.confidence_interval.upper;
+  const probB = results.bayesian?.prob_b_better ?? 0.5;
+  const ciLower = results.confidence_interval?.lower ?? 0;
+  const ciUpper = results.confidence_interval?.upper ?? 0;
 
   // Calculate risk metrics
   const falsePositiveRisk = pValue < 0.05 ? (1 - probB) * 100 : 50; // If significant but low Bayesian prob
