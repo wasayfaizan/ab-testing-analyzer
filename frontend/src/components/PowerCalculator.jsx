@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import axios from "axios";
+import { apiClient } from "../config/api";
 
 function PowerCalculator() {
   const [baselineRate, setBaselineRate] = useState(0.1);
@@ -40,7 +40,7 @@ function PowerCalculator() {
     setLoading(true);
     setError("");
     try {
-      const response = await axios.post("/api/mde-analysis", {
+      const response = await apiClient.post("/api/mde-analysis", {
         baseline_rate: baselineRate,
         sample_size_per_group: sampleSizePerGroup,
         alpha: alpha,

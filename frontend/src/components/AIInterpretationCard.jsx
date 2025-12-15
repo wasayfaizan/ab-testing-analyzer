@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import axios from "axios";
+import { apiClient } from "../config/api";
 
 function AIInterpretationCard({ interpretation, results }) {
   const [selectedMode, setSelectedMode] = useState("executive");
@@ -33,19 +33,22 @@ function AIInterpretationCard({ interpretation, results }) {
 
     setLoading(true);
     try {
-      const response = await axios.post("/api/generate-interpretation-mode", {
-        lift: results.lift,
-        p_value: results.p_value,
-        effect_size: results.effect_size,
-        ci_lower: results.confidence_interval.lower,
-        ci_upper: results.confidence_interval.upper,
-        prob_b_better: results.bayesian.prob_b_better,
-        metric_type: results.metric_type,
-        test_type: results.test_type,
-        mode: mode,
-        group_a_name: results.group_a_name,
-        group_b_name: results.group_b_name,
-      });
+      const response = await apiClient.post(
+        "/api/generate-interpretation-mode",
+        {
+          lift: results.lift,
+          p_value: results.p_value,
+          effect_size: results.effect_size,
+          ci_lower: results.confidence_interval.lower,
+          ci_upper: results.confidence_interval.upper,
+          prob_b_better: results.bayesian.prob_b_better,
+          metric_type: results.metric_type,
+          test_type: results.test_type,
+          mode: mode,
+          group_a_name: results.group_a_name,
+          group_b_name: results.group_b_name,
+        }
+      );
       setAiOutput(response.data.interpretation);
       setSelectedMode(mode);
     } catch (error) {

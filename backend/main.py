@@ -29,10 +29,33 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI(title="A/B Testing Experiment Analyzer API")
 
-# CORS middleware
+# CORS middleware - Configure based on environment
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+# Add production frontend URL from environment variable if set
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    if not frontend_url.startswith("http"):
+        allowed_origins.append(f"https://{frontend_url}")
+        allowed_origins.append(f"http://{frontend_url}")
+    else:
+        allowed_origins.append(frontend_url)
+
+# In production, allow all origins (you can restrict to specific domains for better security)
+# Set ALLOW_ALL_ORIGINS=true to allow all origins, or set FRONTEND_URL for specific domain
+if os.getenv("ALLOW_ALL_ORIGINS", "false").lower() == "true":
+    allow_origins = ["*"]
+else:
+    allow_origins = allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

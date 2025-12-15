@@ -2,6 +2,7 @@ import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDropzone } from "react-dropzone";
 import axios from "axios";
+import { apiClient } from "../config/api";
 
 function UploadPage({ setAnalysisResults }) {
   const [file, setFile] = useState(null);
@@ -258,7 +259,7 @@ function UploadPage({ setAnalysisResults }) {
       }
 
       console.log("Sending request to backend...", endpoint);
-      const response = await axios.post(endpoint, formData, {
+      const response = await apiClient.post(endpoint, formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
@@ -268,7 +269,7 @@ function UploadPage({ setAnalysisResults }) {
       // For standard A/B test, get AI interpretation
       if (analysisMode === "ab") {
         console.log("Requesting AI interpretation...");
-        const interpretationResponse = await axios.post(
+        const interpretationResponse = await apiClient.post(
           "/api/generate-interpretation",
           {
             lift: response.data.lift,
