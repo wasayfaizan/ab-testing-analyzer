@@ -9,7 +9,34 @@
 A professional, dataset-agnostic platform for rigorous experimentation analysis
 </p>
 </div>
-<img width="641" height="674" alt="Screenshot 2025-12-15 at 4 27 37 PM" src="https://github.com/user-attachments/assets/04046335-f74a-43d4-86b1-f1c085b72d9d" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/04046335-f74a-43d4-86b1-f1c085b72d9d" width="85%" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/8cbbeeed-42a3-452f-b407-8c4b07c95057" width="85%" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/81cbdc15-f467-4d57-97e6-b1c84da94093" width="85%" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/81b4d5ca-0c71-4a44-8a1c-3fa1e4ca0993" width="85%" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/6bd0596f-6481-4fb4-b0b8-b1b6d95e8ace" width="85%" />
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/61dfbfc2-6af6-4618-b4ba-3d1c019f241f" width="85%" />
+</p>
+
+
+
+
+
 
 <div class="content">
 
