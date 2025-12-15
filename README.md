@@ -9,6 +9,7 @@
 A professional, dataset-agnostic platform for rigorous experimentation analysis
 </p>
 </div>
+<img width="641" height="674" alt="Screenshot 2025-12-15 at 4 27 37 PM" src="https://github.com/user-attachments/assets/04046335-f74a-43d4-86b1-f1c085b72d9d" />
 
 <div class="content">
 
